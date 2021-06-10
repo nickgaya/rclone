@@ -150,6 +150,7 @@ These flags are available for every command.
       --track-renames-strategy string        Strategies to use when synchronizing using track-renames hash|modtime|leaf (default "hash")
       --transfers int                        Number of file transfers to run in parallel. (default 4)
   -u, --update                               Skip files that are newer on the destination.
+      --update-modtime                       When using --checksum, check timestamps of identical files and update destination mod-time as needed
       --use-cookies                          Enable session cookiejar.
       --use-json-log                         Use json log format.
       --use-mmap                             Use mmap allocator (see docs).

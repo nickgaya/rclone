@@ -624,7 +624,8 @@ Eg `rclone --checksum sync s3:/bucket swift:/bucket` would run much
 quicker than without the `--checksum` flag.
 
 When using this flag, rclone won't update mtimes of remote files if
-they are incorrect as it would normally.
+they are incorrect as it would normally, unless `--update-modtime` is
+specified.
 
 ### --compare-dest=DIR ###
 
@@ -1720,6 +1721,15 @@ On remotes which don't support mod time directly (or when using
 This means that if uploading to one of these remotes, rclone will skip
 any files which exist on the destination and have an uploaded time that
 is newer than the modification time of the source file.
+
+### --update-modtime ###
+
+If `--checksum` is set, this flag causes rclone to check the
+modification times of files with matching size and checksum. If the
+timestamps differ for identical files, rclone will update the
+destination modification time to match the source.
+
+If `--checksum` is not set this flag has no effect.
 
 ### --use-mmap ###
 

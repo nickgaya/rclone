@@ -321,9 +321,9 @@ func TestCopyRedownload(t *testing.T) {
 	fstest.CheckListingWithPrecision(t, r.Flocal, []fstest.Item{file1}, nil, fs.GetModifyWindow(ctx, r.Flocal, r.Fremote))
 }
 
-// Create a file and sync it. Change the last modified date and resync.
-// If we're only doing sync by size and checksum, we expect nothing to
-// to be transferred on the second sync.
+// Create a file and sync it. Change the contents and resync.
+// Change the last modified date and resync. If we're only doing sync by size
+// and checksum, we expect nothing to to be transferred on the last sync.
 func TestSyncBasedOnCheckSum(t *testing.T) {
 	ctx := context.Background()
 	ctx, ci := fs.AddConfig(ctx)
@@ -331,7 +331,7 @@ func TestSyncBasedOnCheckSum(t *testing.T) {
 	defer r.Finalise()
 	ci.CheckSum = true
 
-	file1 := r.WriteFile("check sum", "-", t1)
+	file1 := r.WriteFile("check sum", "c1", t1)
 	fstest.CheckItems(t, r.Flocal, file1)
 
 	accounting.GlobalStats().ResetCounters()
@@ -342,9 +342,21 @@ func TestSyncBasedOnCheckSum(t *testing.T) {
 	assert.Equal(t, toyFileTransfers(r), accounting.GlobalStats().GetTransfers())
 	fstest.CheckItems(t, r.Fremote, file1)
 
-	// Change last modified date only
-	file2 := r.WriteFile("check sum", "-", t2)
+	// Change contents, keep same timestamp
+	file2 := r.WriteFile("check sum", "c2", t1)
 	fstest.CheckItems(t, r.Flocal, file2)
+
+	accounting.GlobalStats().ResetCounters()
+	err = Sync(ctx, r.Fremote, r.Flocal, false)
+	require.NoError(t, err)
+
+	// We should have transferred exactly one file.
+	assert.Equal(t, toyFileTransfers(r), accounting.GlobalStats().GetTransfers())
+	fstest.CheckItems(t, r.Fremote, file2)
+
+	// Change last modified date only
+	file3 := r.WriteFile("check sum", "c2", t2)
+	fstest.CheckItems(t, r.Flocal, file3)
 
 	accounting.GlobalStats().ResetCounters()
 	err = Sync(ctx, r.Fremote, r.Flocal, false)
@@ -352,8 +364,63 @@ func TestSyncBasedOnCheckSum(t *testing.T) {
 
 	// We should have transferred no files
 	assert.Equal(t, int64(0), accounting.GlobalStats().GetTransfers())
-	fstest.CheckItems(t, r.Flocal, file2)
+	fstest.CheckItems(t, r.Flocal, file3)
+	fstest.CheckItems(t, r.Fremote, file2)
+}
+
+// Create a file and sync it. Change the contents and resync.
+// Change the last modified date and resync. With CheckSum and UpdateModTime
+// set to true, we expect the last sync to update the mod time
+func TestSyncBasedOnCheckSumWithUpdateModTime(t *testing.T) {
+	ctx := context.Background()
+	ctx, ci := fs.AddConfig(ctx)
+	r := fstest.NewRun(t)
+	defer r.Finalise()
+
+	ci.CheckSum = true
+	ci.UpdateModTime = true
+
+	file1 := r.WriteFile("check sum", "c1", t1)
+	fstest.CheckItems(t, r.Flocal, file1)
+
+	accounting.GlobalStats().ResetCounters()
+	err := Sync(ctx, r.Fremote, r.Flocal, false)
+	require.NoError(t, err)
+
+	// We should have transferred exactly one file.
+	assert.Equal(t, toyFileTransfers(r), accounting.GlobalStats().GetTransfers())
 	fstest.CheckItems(t, r.Fremote, file1)
+
+	// Change contents, keep same timestamp
+	file2 := r.WriteFile("check sum", "c2", t1)
+	fstest.CheckItems(t, r.Flocal, file2)
+
+	accounting.GlobalStats().ResetCounters()
+	err = Sync(ctx, r.Fremote, r.Flocal, false)
+	require.NoError(t, err)
+
+	// We should have transferred exactly one file.
+	assert.Equal(t, toyFileTransfers(r), accounting.GlobalStats().GetTransfers())
+	fstest.CheckItems(t, r.Fremote, file2)
+
+	// Determine expected operations for SetModTime
+	var transfers, deletes int64
+	transfers, deletes, err = setModTimeOps(ctx, r, file2)
+	require.NoError(t, err)
+
+	// Change last modified date only
+	file3 := r.WriteFile("check sum", "c2", t2)
+	fstest.CheckItems(t, r.Flocal, file3)
+
+	accounting.GlobalStats().ResetCounters()
+	err = Sync(ctx, r.Fremote, r.Flocal, false)
+	require.NoError(t, err)
+
+	// Modtime should be updated with expected transfers/deletes
+	assert.Equal(t, transfers, accounting.GlobalStats().GetTransfers())
+	assert.Equal(t, deletes, accounting.GlobalStats().GetDeletes())
+	fstest.CheckItems(t, r.Flocal, file3)
+	fstest.CheckItems(t, r.Fremote, file3)
 }
 
 // Create a file and sync it. Change the last modified date and the
@@ -562,10 +629,14 @@ func TestSyncAfterChangingModtimeOnly(t *testing.T) {
 	fstest.CheckItems(t, r.Flocal, file1)
 	fstest.CheckItems(t, r.Fremote, file2)
 
+	// Determine expected operations for SetModTime
+	transfers, deletes, err := setModTimeOps(ctx, r, file2)
+	require.NoError(t, err)
+
 	ci.DryRun = true
 
 	accounting.GlobalStats().ResetCounters()
-	err := Sync(ctx, r.Fremote, r.Flocal, false)
+	err = Sync(ctx, r.Fremote, r.Flocal, false)
 	require.NoError(t, err)
 
 	fstest.CheckItems(t, r.Flocal, file1)
@@ -577,6 +648,8 @@ func TestSyncAfterChangingModtimeOnly(t *testing.T) {
 	err = Sync(ctx, r.Fremote, r.Flocal, false)
 	require.NoError(t, err)
 
+	assert.Equal(t, transfers, accounting.GlobalStats().GetTransfers())
+	assert.Equal(t, deletes, accounting.GlobalStats().GetDeletes())
 	fstest.CheckItems(t, r.Flocal, file1)
 	fstest.CheckItems(t, r.Fremote, file1)
 }
@@ -1223,6 +1296,41 @@ func toyFileTransfers(r *fstest.Run) int64 {
 		transfers++ // Extra Copy because S3 emulates Move as Copy+Delete.
 	}
 	return int64(transfers)
+}
+
+// Determine the expected operation counts required to set mod time for an
+// object on the remote Fs
+func setModTimeOps(ctx context.Context, r *fstest.Run, i fstest.Item) (transfers, deletes int64, err error) {
+	if r.Fremote.Precision() == fs.ModTimeNotSupported {
+		// Remote doesn't support modtime, so expect no-op
+		return int64(0), int64(0), nil
+	}
+
+	var remoteObj fs.Object
+	remoteObj, err = r.Fremote.NewObject(ctx, i.Path)
+	for try := 1; try <= *fstest.ListRetries; try++ {
+		if err == nil {
+			break
+		}
+		remoteObj, err = r.Fremote.NewObject(ctx, i.Path)
+	}
+	if err != nil {
+		return int64(-1), int64(-1), fmt.Errorf("Failed to get remote object: %w", err)
+	}
+
+	err = remoteObj.SetModTime(ctx, i.ModTime)
+	switch err {
+	case nil:
+		// Can set mod time without re-upload
+		return int64(0), int64(0), nil
+	case fs.ErrorCantSetModTime:
+		// Must re-upload to set mod time
+		return toyFileTransfers(r), int64(0), nil
+	case fs.ErrorCantSetModTimeWithoutDelete:
+		// Must delete and re-upload to set mod time
+		return toyFileTransfers(r), int64(1), nil
+	}
+	return int64(-1), int64(-1), fmt.Errorf("SetModTime failed: %w", err)
 }
 
 // Test a server-side move if possible, or the backup path if not

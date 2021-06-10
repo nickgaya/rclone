@@ -81,6 +81,7 @@ func AddFlags(ci *fs.ConfigInfo, flagSet *pflag.FlagSet) {
 	flags.BoolVarP(flagSet, &ci.NoCheckDest, "no-check-dest", "", ci.NoCheckDest, "Don't check the destination, copy regardless.")
 	flags.BoolVarP(flagSet, &ci.NoUnicodeNormalization, "no-unicode-normalization", "", ci.NoUnicodeNormalization, "Don't normalize unicode characters in filenames.")
 	flags.BoolVarP(flagSet, &ci.NoUpdateModTime, "no-update-modtime", "", ci.NoUpdateModTime, "Don't update destination mod-time if files identical.")
+	flags.BoolVarP(flagSet, &ci.UpdateModTime, "update-modtime", "", ci.UpdateModTime, "Update destination mod-time if files identical when using --checksum.")
 	flags.StringArrayVarP(flagSet, &ci.CompareDest, "compare-dest", "", nil, "Include additional comma separated server-side paths during comparison.")
 	flags.StringArrayVarP(flagSet, &ci.CopyDest, "copy-dest", "", nil, "Implies --compare-dest but also copies files from paths into destination.")
 	flags.StringVarP(flagSet, &ci.BackupDir, "backup-dir", "", ci.BackupDir, "Make backups into hierarchy based in DIR.")
@@ -222,6 +223,10 @@ func SetFlags(ci *fs.ConfigInfo) {
 
 	if len(ci.CompareDest) > 0 && len(ci.CopyDest) > 0 {
 		log.Fatalf(`Can't use --compare-dest with --copy-dest.`)
+	}
+
+	if ci.UpdateModTime && ci.NoUpdateModTime {
+		log.Fatalf(`Can't use --update-modtime with --no-update-modtime.`)
 	}
 
 	switch {

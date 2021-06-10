@@ -78,6 +78,7 @@ type ConfigInfo struct {
 	NoCheckDest            bool
 	NoUnicodeNormalization bool
 	NoUpdateModTime        bool
+	UpdateModTime          bool
 	DataRateUnit           string
 	CompareDest            []string
 	CopyDest               []string

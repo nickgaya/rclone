@@ -508,6 +508,13 @@ func (s *StatsInfo) HadRetryError() bool {
 	return s.retryError
 }
 
+// GetDeletes reads the number of deletes
+func (s *StatsInfo) GetDeletes() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.deletes
+}
+
 // Deletes updates the stats for deletes
 func (s *StatsInfo) Deletes(deletes int64) int64 {
 	s.mu.Lock()

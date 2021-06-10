@@ -116,7 +116,7 @@ func checkHashes(ctx context.Context, src fs.ObjectInfo, dst fs.Object, ht hash.
 // If the size is the same and mtime is different, unreadable or
 // --checksum is set and the hash is the same then the file is
 // considered to be equal.  In this case the mtime on the dst is
-// updated if --checksum is not set.
+// updated, unless using --checksum without --update-modtime
 //
 // Otherwise the file is considered to be not equal including if there
 // were errors reading info.
@@ -147,10 +147,15 @@ type equalOpt struct {
 // default set of options for equal()
 func defaultEqualOpt(ctx context.Context) equalOpt {
 	ci := fs.GetConfig(ctx)
+	// update mod time by default unless --checksum is enabled
+	updateModTime := !ci.NoUpdateModTime
+	if ci.CheckSum {
+		updateModTime = ci.UpdateModTime
+	}
 	return equalOpt{
 		sizeOnly:          ci.SizeOnly,
 		checkSum:          ci.CheckSum,
-		updateModTime:     !ci.NoUpdateModTime,
+		updateModTime:     updateModTime,
 		forceModTimeMatch: false,
 	}
 }
@@ -177,6 +182,7 @@ func equal(ctx context.Context, src fs.ObjectInfo, dst fs.Object, opt equalOpt) 
 
 	// Assert: Size is equal or being ignored
 
+	noHash := false
 	// If checking checksum and not modtime
 	if opt.checkSum {
 		// Check the hash
@@ -186,17 +192,20 @@ func equal(ctx context.Context, src fs.ObjectInfo, dst fs.Object, opt equalOpt) 
 			return false
 		}
 		if ht == hash.None {
-			common := src.Fs().Hashes().Overlap(dst.Fs().Hashes())
-			if common.Count() == 0 {
-				checksumWarning.Do(func() {
+			noHash = true
+			checksumWarning.Do(func() {
+				common := src.Fs().Hashes().Overlap(dst.Fs().Hashes())
+				if common.Count() == 0 {
 					fs.Logf(dst.Fs(), "--checksum is in use but the source and destination have no hashes in common; falling back to --size-only")
-				})
-			}
-			fs.Debugf(src, "Size of src and dst objects identical")
+				}
+			})
+			fs.Debugf(src, "Sizes identical, could not check hash")
 		} else {
 			fs.Debugf(src, "Size and %v of src and dst objects identical", ht)
 		}
-		return true
+		if !opt.updateModTime {
+			return true
+		}
 	}
 
 	srcModTime := src.ModTime(ctx)
@@ -204,31 +213,40 @@ func equal(ctx context.Context, src fs.ObjectInfo, dst fs.Object, opt equalOpt) 
 		// Sizes the same so check the mtime
 		modifyWindow := fs.GetModifyWindow(ctx, src.Fs(), dst.Fs())
 		if modifyWindow == fs.ModTimeNotSupported {
-			fs.Debugf(src, "Sizes identical")
+			if !opt.checkSum {
+				fs.Debugf(src, "Sizes identical")
+			}
 			return true
 		}
 		dstModTime := dst.ModTime(ctx)
 		dt := dstModTime.Sub(srcModTime)
 		if dt < modifyWindow && dt > -modifyWindow {
-			fs.Debugf(src, "Size and modification time the same (differ by %s, within tolerance %s)", dt, modifyWindow)
+			if opt.checkSum {
+				fs.Debugf(src, "Modification time the same (differ by %s, within tolerance %s)", dt, modifyWindow)
+			} else {
+				fs.Debugf(src, "Size and modification time the same (differ by %s, within tolerance %s)", dt, modifyWindow)
+			}
 			return true
 		}
 
 		fs.Debugf(src, "Modification times differ by %s: %v, %v", dt, srcModTime, dstModTime)
 	}
 
-	// Check if the hashes are the same
-	same, ht, _ := CheckHashes(ctx, src, dst)
-	if !same {
-		fs.Debugf(src, "%v differ", ht)
-		return false
+	// Check if the hashes are the same (if we haven't already done so)
+	if !opt.checkSum {
+		same, ht, _ := CheckHashes(ctx, src, dst)
+		if !same {
+			fs.Debugf(src, "%v differ", ht)
+			return false
+		}
+		noHash = (ht == hash.None)
 	}
-	if ht == hash.None && !ci.RefreshTimes {
-		// if couldn't check hash, return that they differ
+	if noHash && !ci.RefreshTimes {
+		// if timestamps differ and couldn't check hash, return not equal
 		return false
 	}
 
-	// mod time differs but hash is the same to reset mod time if required
+	// mod time differs but hash is the same so update mod time if required
 	if opt.updateModTime {
 		if !SkipDestructive(ctx, src, "update modification time") {
 			// Size and hash the same but mtime different
@@ -1555,6 +1573,7 @@ func NeedTransfer(ctx context.Context, dst, src fs.Object) bool {
 			// Do a size only compare unless --checksum is set
 			opt := defaultEqualOpt(ctx)
 			opt.sizeOnly = !ci.CheckSum
+			opt.updateModTime = false
 			if equal(ctx, src, dst, opt) {
 				fs.Debugf(src, "Destination mod time is within %v of source and files identical, skipping", modifyWindow)
 				return false
